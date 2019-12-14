@@ -1,0 +1,19 @@
+{
+  "name": "gzserver",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "test": "test"
+  },
+  "author": "Lev",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.19.0",
+    "connect-multiparty": "^2.2.0",
+    "express": "^4.17.1",
+    "fs": "0.0.1-security",
+    "mongodb": "^3.4.0",
+    "multer": "^1.4.2"
+  }
+}
