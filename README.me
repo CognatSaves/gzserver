@@ -1,0 +1,25 @@
+This is a test project for checking my ability to work with node.js
+
+How to start:
+
+1) git clone https://github.com/CognatSaves/gzserver.git
+2) npm install
+3) start mongo on default address (localhost: 27017)
+4) node server.js
+
+Project requests
+
+1) /upload (POST)- task 1 - uploading an archive on the server.
+Data sended on form-data variant with fields - title(String), description(String), expire(Date string like '2017-11-29T02:28:06.322Z'), archive(File)
+On correct way return you an object from collection that was created (where archive save address, _id save _id, other - simular).
+
+2) /archiveListPage (GET)- task 2.1 - returns all available archives with selected page and step.
+Data sended throw query params - page and step (number of elements on page). If something lost - set default;
+Returns archive with selected collection elements.
+
+3) /archivesList (GET) - task 2.2 - returns all available archives divided by selected-size pages.
+Data sended throw query params - step(number of page elements). If something lost - set default;
+Returs matrix - array, where each element - is a page with collection elements.
+
+Server remove archives automatically after they've become deprecated using setTimeout setted on the best suited element.
+During service, server can change that element by more suited (after upload).

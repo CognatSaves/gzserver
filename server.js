@@ -2,18 +2,12 @@ const express = require('express');
 const app = express();
 const bodyParser = require('body-parser');
 const fs = require('fs'); 
-//const multer = require('multer');
-//const gunzip = require('gunzip-file');
 const zlib = require('zlib');
-// const {gzip, ungzip} = require('node-gzip');
-// const readline = require('linebyline'); 
-// const stream = require('stream');
-// const byline = require('byline');
 const port = 3000;
 
 
 const MongoClient = require("mongodb").MongoClient;
-const mongoClient = new MongoClient("mongodb://localhost:27017/", {useNewUrlParser: true});
+const mongoClient = new MongoClient("mongodb://localhost:27017/", {useUnifiedTopology: true});
 
 const ObjectID = require('mongodb').ObjectID;
 let dbClient;
@@ -43,10 +37,9 @@ function resetArchiveDeleteTimeout(object){
     }
     console.log('is standart call='+standart);
     console.log('delta=',delta);
-    setTimeout(()=>{ 
-        nextArchiveToDelete='';
-        nextDeleteExpiresDate=null;
+    setTimeout(()=>{
         standart ? deleteOneArchive(nextArchiveToDelete, true) : deleteArchiveCycleStarter();
+
     }, Math.max(delta,0));
 }
 function deleteOneArchive(_id, callStarter){
@@ -63,6 +56,8 @@ function deleteOneArchive(_id, callStarter){
         
         collection.deleteOne({_id: ObjectID(_id)});
         if(callStarter){
+            nextDeleteExpiresDate=null;
+            nextArchiveToDelete='';
             deleteArchiveCycleStarter();
         }
         return;
@@ -164,9 +159,15 @@ app.post('/upload', multipartMiddleware, (req,res)=>{
                     }
                     fs.close(fdRead,()=>{});
                     fs.open(name,'w',function(err,fdWrite){
+                        if(err) {
+                            console.log('Error:',err);
+                            return res.statusCode(500);
+                        }
                         let bufferSize = stats.size;
                         let chunkSize = 512;
                         let bytesWrite = 0;
+                        
+                        console.log('fdWrite',fdWrite);
                         while(bytesWrite < bufferSize){
                             if((bytesWrite + chunkSize) > bufferSize){
                                 chunkSize = (bufferSize - bytesWrite);
@@ -229,7 +230,9 @@ app.get('/archivesListPage', (req,res)=>{
     const collection = req.app.locals.archivecoll;
     collection.find({}).limit(step).skip(step*(page-1))
     .toArray(function(err, result){
-        res.send(result);
+        res.send({
+            archives:result
+        });
     });
 })
 
@@ -254,7 +257,9 @@ app.get('/archivesList', (req,res)=>{
                 selectedSubArray++;
             }
         }
-        return res.send(resArray);
+        return res.send({
+            archives:resArray
+        });
     })
 })
 
