@@ -3,25 +3,23 @@ const app = express();
 const bodyParser = require('body-parser');
 const fs = require('fs'); 
 //const multer = require('multer');
+//const gunzip = require('gunzip-file');
+const zlib = require('zlib');
+// const {gzip, ungzip} = require('node-gzip');
+// const readline = require('linebyline'); 
+// const stream = require('stream');
+// const byline = require('byline');
 const port = 3000;
 
 
 const MongoClient = require("mongodb").MongoClient;
 const mongoClient = new MongoClient("mongodb://localhost:27017/", {useNewUrlParser: true});
 
-
+const ObjectID = require('mongodb').ObjectID;
 let dbClient;
 
 mongoClient.connect(function(err,client){
 
-        // const db = client.db('archivedb');
-        // const collection = db.collection('archivecoll');
-        // collection.insertOne(archive,function(err,result){
-        //     if(err){
-        //         return console.log(err);
-        //     }
-        //     client.close();
-        // }) 
         if(err) throw err;
         dbClient = client;
         app.locals.archivecoll = client.db('archivedb').collection('archivecoll');
@@ -50,18 +48,15 @@ app.get('/', (req,res)=>{
 
 app.post('/upload', multipartMiddleware, (req,res)=>{
     console.log('call upload');
-    //console.log(req.body);
-    //console.log(req.files);
     let archive = req.files;
-    //console.log(archive);
-    
 
     try{
         let originalFilename = req.files.archive.originalFilename;
         let filenameParts = originalFilename.toString().split('.');
         let type = filenameParts[filenameParts.length-1];
-        let name = './uploads/file'+Date.now()+'.'+type;
+        let name = './uploads/'+originalFilename;
         console.log('try to open');
+        // console.log(originalFilename);
         fs.open(req.files.archive.path, 'r', function(err, fdRead){
             console.log('open first')
             
@@ -157,8 +152,100 @@ app.get('/archivesListPage', (req,res)=>{
     });
 })
 
+app.get('/archivesList', (req,res)=>{
+    console.log(req.query);
+    let step = parseInt(req.query.step);
+    if(!step || step<1){
+        step=10;
+    }
+    const collection = req.app.locals.archivecoll;
+    collection.find({}).toArray(function(err,result){
+        console.log(result);
+        let resArray = [];
+        let index = 0; let selectedSubArray=0; let numberOfElements=0;
+        while(index!==result.length){
+            if(numberOfElements===0){
+                resArray[selectedSubArray]=[];
+            }
+            resArray[selectedSubArray].push(result[index]);
+            index++;numberOfElements++;
+            if(numberOfElements===step){
+                numberOfElements=0;
+                selectedSubArray++;
+            }
+        }
+        return res.send(resArray);
+    })
+})
+
+app.get('/archiveFileLines', (req,res)=>{
+    console.log(req.query);
+    let _id = req.query._id;
+    let lineNumber = parseInt(req.query.lineNumber);
+    if(!_id){
+        return res.sendStatus(400);
+    }
+    if(!lineNumber){
+        lineNumber=1;
+    }
+    const collection = req.app.locals.archivecoll;
+    collection.find({}).toArray(function(err,result){
+        console.log(result);
+    })
+    collection.find({_id: ObjectID(_id)}).toArray(function(err,result){
+        console.log(result);
+        if(result.length>0){
+            let archiveAddress =result[0].archive; 
+            let readStream = fs.createReadStream(archiveAddress).pipe(zlib.createGunzip());
+
+            getLines(readStream, 2, (error, lines)=>{
+                if(!error){
+                    console.log(lines);
+                }
+                else{
+                    console.log(error);
+                }
+                return res.send({
+                    lines:lines
+                });
+            })
+        }
+        else{
+            return res.sendStatus(400);
+        }
+    })
+})
 process.on("SIGINT", () => {
     dbClient.close();
     process.exit();
 });
-// app.get('/archivesList',)
+
+
+function getLines(stream, lineNumber, callback) {
+    console.log('getLine call');
+    console.log('CreateStreamEnd');
+    var fileData = '';
+    stream.on('data', function(data){
+        console.log('streamOn');
+        //console.log(data)
+        fileData += data;
+
+        // The next lines should be improved
+        var lines = fileData.split("\r\n");
+
+        if(lines.length >= +lineNumber){
+        stream.destroy();
+        callback(null, lines.slice(0,lineNumber));
+        }
+    });
+
+    stream.on('error', function(){
+      callback('Error', null);
+    });
+
+    stream.on('end', function(){
+      callback('File end reached without finding line', null);
+    });
+
+}
+
