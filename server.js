@@ -18,6 +18,96 @@ const mongoClient = new MongoClient("mongodb://localhost:27017/", {useNewUrlPars
 const ObjectID = require('mongodb').ObjectID;
 let dbClient;
 
+
+let nextArchiveToDelete = '';//should be = _id
+let deleteTimeoutId = '';
+let nextDeleteExpiresDate = null;//should be Date object
+
+function resetArchiveDeleteTimeout(object){
+    if(!object){
+        //any problem - call basic cycle function
+        deleteArchiveCycleStarter();
+        return;
+    }
+    console.log('resetArchiveDeleteTimeout');
+    let now = new Date();
+    let expiresDate = new Date(object.expire);
+    nextDeleteExpiresDate=expiresDate;
+    nextArchiveToDelete = object._id;
+    let delta = nextDeleteExpiresDate-now;
+    let standart = true;
+    //next one is 
+    if(delta>2000000000){//i know that integer = 2 147 483 647 but set 2kkk 
+        delta=2000000000;
+        standart=false;
+    }
+    console.log('is standart call='+standart);
+    console.log('delta=',delta);
+    setTimeout(()=>{ 
+        nextArchiveToDelete='';
+        nextDeleteExpiresDate=null;
+        standart ? deleteOneArchive(nextArchiveToDelete, true) : deleteArchiveCycleStarter();
+    }, Math.max(delta,0));
+}
+function deleteOneArchive(_id, callStarter){
+    console.log('call deleteOneArchive');
+    const collection = app.locals.archivecoll;
+    collection.find({_id: ObjectID(_id)}).toArray(function(err,result){
+        if(err) throw err;
+        if(result.length===0) {deleteArchiveCycleStarter(); return};//if array is empty - recall stard cycle func
+        let obj = result[0];
+        let fileAddress = obj.archive;
+        fs.unlink(fileAddress, (err) => {
+            if (err) {console.log('Error in file deleting, continue. Error=',err);}
+        });
+        
+        collection.deleteOne({_id: ObjectID(_id)});
+        if(callStarter){
+            deleteArchiveCycleStarter();
+        }
+        return;
+    })
+}
+function deleteArchiveCycleStarter(){
+    console.log('deleteArchiveCycleStarter');
+
+    const collection = app.locals.archivecoll;
+    //console.log('collection=',collection);
+    collection.find({}).toArray(function(err,result){
+        let now = new Date();let nextDeleteOne=null;let objectsToRemove = [];
+        for(let i=0; i<result.length; i++){
+            let expireDate = new Date(result[i].expire);
+            if(expireDate<now){
+                objectsToRemove.push(result[i]._id);
+                //console.log('kill');
+            }
+            else{
+                if(!nextDeleteExpiresDate){
+                    nextDeleteExpiresDate = expireDate;
+                    //nextArchiveToDelete = result[i]._id;
+                    nextDeleteOne=result[i];
+                }
+                else{
+                    if(nextDeleteExpiresDate>expireDate){
+                        nextDeleteExpiresDate = expireDate;
+                        //nextArchiveToDelete = result[i]._id;
+                        nextDeleteOne=result[i];
+                    }
+                }
+            }
+        }
+
+        console.log('lastBreathe='+nextDeleteExpiresDate);
+        console.log('objectsToRemove.length='+objectsToRemove.length);
+        for(let i=0; i<objectsToRemove.length; i++){
+            deleteOneArchive(objectsToRemove[i]);
+        }
+        if(nextDeleteOne){
+            resetArchiveDeleteTimeout(nextDeleteOne);
+        }
+        
+    })
+}
 mongoClient.connect(function(err,client){
 
         if(err) throw err;
@@ -29,6 +119,7 @@ mongoClient.connect(function(err,client){
                 return console.log('Error ', err);
             }
             console.log(`Server is listening on ${port}`);
+            deleteArchiveCycleStarter();
         })
 });
 
@@ -38,8 +129,7 @@ let temporaryArchiveSave = [];
 
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({extended: false}));
-//app.use(multer({dest:"uploads"}).single('archive'));
-const jsonParser = express.json();
+
 var multipart = require('connect-multiparty');
 var multipartMiddleware = multipart();
 app.get('/', (req,res)=>{
@@ -48,8 +138,6 @@ app.get('/', (req,res)=>{
 
 app.post('/upload', multipartMiddleware, (req,res)=>{
     console.log('call upload');
-    let archive = req.files;
-
     try{
         let originalFilename = req.files.archive.originalFilename;
         let filenameParts = originalFilename.toString().split('.');
@@ -66,40 +154,25 @@ app.post('/upload', multipartMiddleware, (req,res)=>{
                     let buffer = new Buffer(bufferSize);
                     let bytesRead = 0;
                     console.log('readStart');
-                    let i=0;
                     while(bytesRead < bufferSize){
                         if((bytesRead + chunkSize) > bufferSize){
                             chunkSize = (bufferSize - bytesRead);
                         }
                         fs.read(fdRead, buffer, bytesRead, chunkSize, bytesRead,
                             ()=>{});   
-                        bytesRead +=chunkSize;
-                        if(i*10000000<bytesRead){
-                            //console.log(i+"&&&&");
-                            i++;
-                        }
-                        
+                        bytesRead +=chunkSize;            
                     }
-                    //console.log(buffer.toString('utf8',0, 500));
                     fs.close(fdRead,()=>{});
-
-
                     fs.open(name,'w',function(err,fdWrite){
-                        //console.log(stats, buffer);
                         let bufferSize = stats.size;
                         let chunkSize = 512;
                         let bytesWrite = 0;
-                        let j=0;
                         while(bytesWrite < bufferSize){
                             if((bytesWrite + chunkSize) > bufferSize){
                                 chunkSize = (bufferSize - bytesWrite);
                             }
                             fs.write(fdWrite,buffer, bytesWrite, chunkSize, bytesWrite, ()=>{});
                             bytesWrite +=chunkSize;
-                            if(j*10000000<bytesWrite){
-                                //console.log(j+'****');
-                                j++;
-                            }
                         }
                         fs.close(fdWrite,()=>{});
                         buffer=""; 
@@ -117,6 +190,16 @@ app.post('/upload', multipartMiddleware, (req,res)=>{
                                 return console.log(err);
                             }
                             console.log('send answer');
+
+                            let expiresDate = new Date(archive.expire);
+                            if(!nextDeleteExpiresDate){
+                                resetArchiveDeleteTimeout(archive)
+                            }
+                            else{
+                                if(expiresDate<nextDeleteExpiresDate){
+                                    resetArchiveDeleteTimeout(archive)
+                                }
+                            }                           
                             res.send(archive);
                         })
                         
@@ -134,7 +217,7 @@ app.post('/upload', multipartMiddleware, (req,res)=>{
 })
 
 app.get('/archivesListPage', (req,res)=>{
-    console.log(req.query);
+    console.log('archivesListPage call');
     let page = parseInt(req.query.page);
     let step = parseInt(req.query.step);
     if(!page){
@@ -144,23 +227,20 @@ app.get('/archivesListPage', (req,res)=>{
         step=10;
     }
     const collection = req.app.locals.archivecoll;
-    //collection.count().then((value)=>{console.log('all count='+value)})
     collection.find({}).limit(step).skip(step*(page-1))
     .toArray(function(err, result){
-        console.log(result);
         res.send(result);
     });
 })
 
 app.get('/archivesList', (req,res)=>{
-    console.log(req.query);
+    console.log('archivesList call');
     let step = parseInt(req.query.step);
     if(!step || step<1){
         step=10;
     }
     const collection = req.app.locals.archivecoll;
     collection.find({}).toArray(function(err,result){
-        console.log(result);
         let resArray = [];
         let index = 0; let selectedSubArray=0; let numberOfElements=0;
         while(index!==result.length){
@@ -179,7 +259,7 @@ app.get('/archivesList', (req,res)=>{
 })
 
 app.get('/archiveFileLines', (req,res)=>{
-    console.log(req.query);
+    console.log('archiveFileLines call');
     let _id = req.query._id;
     let lineNumber = parseInt(req.query.lineNumber);
     if(!_id){
@@ -189,25 +269,22 @@ app.get('/archiveFileLines', (req,res)=>{
         lineNumber=1;
     }
     const collection = req.app.locals.archivecoll;
-    collection.find({}).toArray(function(err,result){
-        console.log(result);
-    })
     collection.find({_id: ObjectID(_id)}).toArray(function(err,result){
-        console.log(result);
         if(result.length>0){
             let archiveAddress =result[0].archive; 
             let readStream = fs.createReadStream(archiveAddress).pipe(zlib.createGunzip());
 
-            getLines(readStream, 2, (error, lines)=>{
+            getLines(readStream,lineNumber, (error, lines)=>{
                 if(!error){
                     console.log(lines);
+                    return res.send({
+                        lines:lines
+                    });
                 }
                 else{
-                    console.log(error);
+                    //console.log(error);
+                    return res.sendStatus(500);
                 }
-                return res.send({
-                    lines:lines
-                });
             })
         }
         else{
@@ -222,16 +299,13 @@ process.on("SIGINT", () => {
 
 
 function getLines(stream, lineNumber, callback) {
-    console.log('getLine call');
-    console.log('CreateStreamEnd');
+    console.log('getLines call');
     var fileData = '';
     stream.on('data', function(data){
-        console.log('streamOn');
-        //console.log(data)
         fileData += data;
 
         // The next lines should be improved
-        var lines = fileData.split("\r\n");
+        var lines = fileData.split(/\r\n|\r|\n/);//\n\\\r
 
         if(lines.length >= +lineNumber){
         stream.destroy();
